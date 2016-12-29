@@ -1,17 +1,14 @@
 package ytdl;
 
+import java.awt.Font;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.URLDecoder;
-import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
@@ -24,13 +21,10 @@ import javax.swing.SwingConstants;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClientBuilder;
 
 public class Downloader extends JFrame {
-	private static final long serialVersionUID = -1034923882983690258L;
-
 	private enum State {
 		GENERIC_ERROR("Error downloading.."),
 		CONNECTION_ERROR("Error connecting to server.."),
@@ -56,61 +50,66 @@ public class Downloader extends JFrame {
 		}
 	}
 	
-	public static class Pair {
-		String key;
-		String value;
+	private static final long serialVersionUID = 2466361469062899471L;
 
-		public Pair(String k, String v) {
-			key = k;
-			value = v;
-		}
-	}
-
-	private static final String USER_AGENT = "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.2.13) Gecko/20101203 Firefox/3.6.13";
-
-	private CloseableHttpClient client;
+	private HttpClient client;
+	private VideoInfo info;
 	private JLabel progressLabel;
 	private final AtomicBoolean isDownloading = new AtomicBoolean(false);
 	private int currentTry = 1;
-	private int maxTries = 10;
+	private int maxTries = 3;
 
-	public Downloader() {
+	public Downloader(HttpClient client, final VideoInfo info) {
 		super();
+		
+		this.client = client;
+		this.info = info;
+		
 		setSize(400, 250);
 		setLocationRelativeTo(null);
-		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-		setTitle("Youtube video downloader");
+		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		setResizable(false);
 		setLayout(new BoxLayout(getContentPane(), BoxLayout.Y_AXIS));
+		setTitle(info.title);
 
-		JLabel urlLabel = new JLabel("Youtube video url:");
-		add(urlLabel);
-
-		final JTextField urlTextField = new JTextField();
-		add(urlTextField);
-
+		add(Box.createVerticalStrut(15));
+		
 		JLabel outputLabel = new JLabel("Save to folder:");
 		add(outputLabel);
 
 		final JTextField outputTextField = new JTextField(System.getProperty("user.home") + File.separator + "Desktop");
 		add(outputTextField);
 		
+		add(Box.createVerticalStrut(15));
+		
+		Font font = Font.getFont("Consolas");
+		if (font == null){
+			// fallback to courier new
+			font = new Font("monospaced", Font.PLAIN, 12);
+		}
+		
 		final ButtonGroup qualityGroup = new ButtonGroup();
-		JRadioButton hdQuality = new JRadioButton("720p");
-		hdQuality.setActionCommand("hd720");
-		JRadioButton medQuality = new JRadioButton("480p");
-		medQuality.setActionCommand("medium");
-		JRadioButton lowQuality = new JRadioButton("240p");
-		lowQuality.setActionCommand("small");
-		
-		qualityGroup.add(hdQuality);
-		qualityGroup.add(medQuality);
-		qualityGroup.add(lowQuality);
-		qualityGroup.setSelected(hdQuality.getModel(), true);
-		
-		add(hdQuality);
-		add(medQuality);
-		add(lowQuality);
+
+		DownloadType t = null;
+		for (int i = 0; i < info.downloadTypes.size(); ++i){
+			t = info.downloadTypes.get(i);
+			String type = t.hasAudio ? "audio" : "";
+			type += t.hasVideo ? (type.isEmpty() ? "video" : "/video") : "";
+			
+			String extension = t.extension == null ? "???" : t.extension;
+			
+			String quality = t.quality != null ? t.quality : (t.bitrate == -1 ? "???" : (t.bitrate / 1024) + "kbps");
+			
+			String name = String.format("%-12s (%s); %-12s", type, extension, quality);
+			
+			JRadioButton qualityButton = new JRadioButton(name, i == 0);
+			qualityButton.setFont(font);
+			qualityButton.setActionCommand("" + i);
+			qualityGroup.add(qualityButton);
+			add(qualityButton);
+		}	
+
+		add(Box.createVerticalStrut(5));
 
 		final JButton downloadButton = new JButton("Download");
 		downloadButton.addActionListener(new ActionListener() {
@@ -120,17 +119,17 @@ public class Downloader extends JFrame {
 					isDownloading.set(true);
 					downloadButton.setEnabled(false);
 					
+					final DownloadType type = info.downloadTypes.get(Integer.parseInt(qualityGroup.getSelection().getActionCommand()));
+					
 					new Thread(){
 						public void run(){
 							try {
 								currentTry = 1;
 								
 								while (currentTry <= maxTries){
-									if (download(urlTextField.getText(), outputTextField.getText(), qualityGroup.getSelection().getActionCommand(), "mp4"))
-									{
+									if (download(type, outputTextField.getText())){
 										break;
 									}
-									System.out.println("Download failed " + currentTry);
 									++currentTry;
 									Thread.sleep(1000);
 								}
@@ -148,6 +147,8 @@ public class Downloader extends JFrame {
 		});
 		add(downloadButton);
 		
+		add(Box.createVerticalStrut(5));
+		
 		add(new JSeparator(SwingConstants.HORIZONTAL));
 		
 		progressLabel = new JLabel();
@@ -155,170 +156,25 @@ public class Downloader extends JFrame {
 		setStatus(State.READY);
 
 		setVisible(true);
+		pack();
 	}
 
-	public boolean download(String source, String dest, String quality, String format) {
+	public boolean download(DownloadType type, String dest) {
 		try {
 			setStatus(State.READY);
 			
-			String videoId = source.substring(source.indexOf("?") + 1).split("=")[1];
+			String fileName = info.title + "." + type.extension;
 
-			client = HttpClientBuilder.create().build();
-
-			ArrayList<Pair> videoParams = getVideoParams(videoId, true/*currentTry == maxTries/*/);
-			
-			String fileName = getVideoTitle(videoParams);
-			if (fileName == null){
-				// fallback to filename = id
-				fileName = videoId;
-			}
-			fileName += "." + format;
-			
-			String downloadLink = getDownloadLink(videoParams, format, quality);
-			if (downloadLink == null){
-				return false;
-			}
-
-			downloadFile(downloadLink, dest, fileName);
+			return downloadFile(type.url, dest, fileName);
 		}
 		catch (Exception e) {
 			e.printStackTrace();
-			setStatus(State.GENERIC_ERROR, ". " + e.getMessage());
+			setStatusText(State.GENERIC_ERROR, ". " + e.getMessage());
 			return false;
 		}
-		return true;
 	}
 
-	private ArrayList<Pair> getVideoParams(String videoId, boolean useFallBackLink) {
-		try {
-			setStatus(State.VIDEO_PARAM_START);
-			
-			URI uri = null;
-			
-			if (useFallBackLink){
-				uri = new URI("http://youtube.com/get_video_info?video_id=" + videoId);
-			}
-			else {
-				uri = new URI("https://www.youtube.com/get_video_info?video_id=" + videoId + "&el=vevo&el=embedded&asv=3&sts=15902");
-			}
-				
-			HttpGet request = new HttpGet();
-			request.setURI(uri);
-			request.setHeader("User-Agent", USER_AGENT);
-
-			HttpResponse response = client.execute(request);
-			HttpEntity entity = response.getEntity();
-
-			if (entity == null || response.getStatusLine().getStatusCode() != 200) {
-				setStatus(State.CONNECTION_ERROR, ". Code: " + response.getStatusLine().getStatusCode());
-				return null;
-			}
-
-			StringBuilder builder = new StringBuilder();
-			BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(entity.getContent()));
-			char buffer[] = new char[1024];
-			int read = 0;
-			
-			while ((read = bufferedReader.read(buffer)) != -1){
-				builder.append(new String(buffer, 0, read));
-			}
-			
-			String decodedResponse = builder.toString();
-			if (useFallBackLink) {
-				decodedResponse = URLDecoder.decode(builder.toString(), "UTF-8");
-			}
-			ArrayList<Pair> encodedPairs = responseToPairs(decodedResponse, "&", "=");
-			
-			if (useFallBackLink){
-				// Fallback, return whatever you got and pray for it to work
-				return encodedPairs;
-			}
-			else {
-				// Look for the new key value pairs
-				for (Pair i : encodedPairs){
-					if (i.key.equals("url_encoded_fmt_stream_map")){
-						return responseToPairs(URLDecoder.decode(i.value, "UTF-8"), "&", "=");
-					}
-				}
-			}
-			
-			return encodedPairs;
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-		}
-
-		setStatus(State.VIDEO_PARAM_ERROR);
-		return null;
-	}
-
-	private String getVideoTitle(ArrayList<Pair> params) {
-		try {
-			for (Pair i : params) {
-				if (i.key.equals("title")) {
-					return i.value;
-				}
-			}
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-		}
-
-		setStatus(State.VIDEO_TITLE_ERROR);
-		return null;
-	}
-
-	private String getDownloadLink(ArrayList<Pair> params, String format, String quality) {
-		try {
-			setStatus(State.LINK_PARSE_START);
-			
-			boolean getUrl = false;
-			boolean checkQuality = false;
-
-			for (Pair i : params) {
-				if (i.key.equals("type") && i.value.contains(format)) {
-					checkQuality = true;
-					continue;
-				}
-
-				if (checkQuality && i.key.equals("quality")) {
-					boolean foundQuality = i.value.equals(quality);
-					checkQuality = false;
-					getUrl = foundQuality;
-				}
-
-				if (getUrl && i.key.equals("url")) {
-					return URLDecoder.decode(i.value, "UTF-8");
-				}
-			}
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-		}
-
-		setStatus(State.LINK_PARSE_ERROR, ". [" + format + ";" + quality + "] not found");
-		return null;
-	}
-
-	private ArrayList<Pair> responseToPairs(String input, String pairDelim, String keyValueDelim) {
-		ArrayList<Pair> params = new ArrayList<Pair>();
-
-		String kv[] = null;
-		try {
-			String pairs[] = input.split(pairDelim);
-			for (String i : pairs) {
-				kv = i.split(keyValueDelim);
-				params.add(new Pair(kv[0], URLDecoder.decode(kv[1], "UTF-8")));
-			}
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-		}
-
-		return params;
-	}
-
-	private void downloadFile(String downloadLink, String destination, String fileName) throws Exception{
+	private boolean downloadFile(String downloadLink, String destination, String fileName) throws Exception {
 		setStatus(State.DOWNLOAD_START);
 		
 		//destination = destination.replaceAll("\\\\", "\\").replaceAll("/", "\\").replaceAll("\\", File.separator);
@@ -333,14 +189,14 @@ public class Downloader extends JFrame {
 		}
 
 		HttpGet request = new HttpGet(downloadLink);
-		request.setHeader("User-Agent", USER_AGENT);
+		request.setHeader("User-Agent", InfoParser.USER_AGENT);
 
 		HttpResponse response = client.execute(request);
 		HttpEntity entity = response.getEntity();
 
 		if (entity == null || response.getStatusLine().getStatusCode() != 200) {
-			setStatus(State.DOWNLOAD_BAD_RESPONSE, ". Code: " + response.getStatusLine().getStatusCode());
-			return;
+			setStatusText(State.DOWNLOAD_BAD_RESPONSE, ". Code: " + response.getStatusLine().getStatusCode());
+			return false;
 		}
 
 		InputStream inputStream = entity.getContent();
@@ -357,13 +213,14 @@ public class Downloader extends JFrame {
 		fileStream.close();
 		
 		setStatus(State.DOWNLOAD_DONE);
+		return true;
 	}
 
 	private void setStatus(State state){
-		setStatus(state, null);
+		setStatusText(state, null);
 	}
 	
-	private void setStatus(State state, String additionalInfo){
+	private void setStatusText(State state, String additionalInfo){
 		StringBuilder message = new StringBuilder();
 		if (state != State.READY && state != State.DOWNLOAD_DONE){
 			message.append("(").append(currentTry).append(") "); 
@@ -376,9 +233,5 @@ public class Downloader extends JFrame {
 		}
 		
 		progressLabel.setText(message.toString());
-	}
-	
-	public static void main(String args[]) {
-		new Downloader();
 	}
 }
