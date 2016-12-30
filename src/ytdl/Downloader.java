@@ -1,11 +1,19 @@
 package ytdl;
 
+import java.awt.Color;
+import java.awt.Desktop;
 import java.awt.Font;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseListener;
+import java.awt.font.TextAttribute;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.URI;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.swing.Box;
@@ -14,6 +22,7 @@ import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JPanel;
 import javax.swing.JRadioButton;
 import javax.swing.JSeparator;
 import javax.swing.JTextField;
@@ -88,25 +97,75 @@ public class Downloader extends JFrame {
 			font = new Font("monospaced", Font.PLAIN, 12);
 		}
 		
+		Map<TextAttribute, Integer> fontAttributes = new HashMap<TextAttribute, Integer>();
+		fontAttributes.put(TextAttribute.UNDERLINE, TextAttribute.UNDERLINE_ON);
+		Font urlFont = font.deriveFont(fontAttributes);
+		
 		final ButtonGroup qualityGroup = new ButtonGroup();
-
-		DownloadType t = null;
 		for (int i = 0; i < info.downloadTypes.size(); ++i){
-			t = info.downloadTypes.get(i);
+			final DownloadType t = info.downloadTypes.get(i);
+			
 			String type = t.hasAudio ? "audio" : "";
 			type += t.hasVideo ? (type.isEmpty() ? "video" : "/video") : "";
+			if (type.isEmpty()){
+				type = "???";
+			}
 			
 			String extension = t.extension == null ? "???" : t.extension;
 			
-			String quality = t.quality != null ? t.quality : (t.bitrate == -1 ? "???" : (t.bitrate / 1024) + "kbps");
+			String quality = t.quality != null ? t.quality : "";
+			quality += t.bitrate != -1 ? ((quality.isEmpty() ? "" : "/") + (t.bitrate / 1024) + "kbps") : "";
+			if (quality.isEmpty()){
+				quality = "???";
+			}
 			
 			String name = String.format("%-12s (%s); %-12s", type, extension, quality);
 			
+			JPanel linkPanel = new JPanel();
+			linkPanel.setLayout(new BoxLayout(linkPanel, BoxLayout.X_AXIS));
+					
 			JRadioButton qualityButton = new JRadioButton(name, i == 0);
 			qualityButton.setFont(font);
 			qualityButton.setActionCommand("" + i);
 			qualityGroup.add(qualityButton);
-			add(qualityButton);
+			linkPanel.add(qualityButton);
+			
+			linkPanel.add(Box.createHorizontalGlue());
+			
+			JLabel previewLabel = new JLabel("Preview");
+			previewLabel.setFont(urlFont);
+			previewLabel.setForeground(Color.blue);
+			previewLabel.addMouseListener(new MouseListener(){
+
+				@Override
+				public void mouseClicked(MouseEvent evt) {
+					try {
+						if(Desktop.isDesktopSupported())
+						{
+							Desktop.getDesktop().browse(new URI(t.url));
+						}
+					}
+					catch (Exception e){
+						e.printStackTrace();
+					}
+				}
+
+				@Override
+				public void mouseEntered(MouseEvent e) {}
+
+				@Override
+				public void mouseExited(MouseEvent e) {}
+
+				@Override
+				public void mousePressed(MouseEvent e) {}
+
+				@Override
+				public void mouseReleased(MouseEvent e) {}
+			});
+			//"<html><a href=\"Preview\">" + t.url + "</a></html>");
+			linkPanel.add(previewLabel);
+			
+			add(linkPanel);
 		}	
 
 		add(Box.createVerticalStrut(5));

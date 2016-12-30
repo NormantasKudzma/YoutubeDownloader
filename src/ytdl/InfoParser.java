@@ -1,5 +1,6 @@
 package ytdl;
 
+import java.awt.Dimension;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.BufferedReader;
@@ -7,6 +8,7 @@ import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.swing.Box;
@@ -53,7 +55,7 @@ public class InfoParser extends JFrame{
 
 	public static final String USER_AGENT = "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.2.13) Gecko/20101203 Firefox/3.6.13";
 	private static final long serialVersionUID = -1034923882983690258L;
-	private static final int BUILD = 2;
+	private static final int BUILD = 3;
 
 	private CloseableHttpClient client;
 	private JLabel progressLabel;
@@ -70,7 +72,7 @@ public class InfoParser extends JFrame{
 		setLocationRelativeTo(null);
 		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		setTitle("Youtube video downloader (build " + BUILD + ")");
-		setResizable(false);
+		setMinimumSize(new Dimension(400, 10));
 		setLayout(new BoxLayout(getContentPane(), BoxLayout.Y_AXIS));
 
 		add(Box.createVerticalStrut(15));
@@ -121,11 +123,6 @@ public class InfoParser extends JFrame{
 			}
 		});
 		
-		add(Box.createVerticalStrut(15));
-		
-		JLabel tipLabel = new JLabel("Tip: click `" + downloadButton.getText() + "` again if there aren't enough download options.");
-		add(tipLabel);
-		
 		add(Box.createVerticalStrut(5));
 		
 		add(downloadButton);
@@ -147,16 +144,9 @@ public class InfoParser extends JFrame{
 			setStatus(State.READY);
 
 			String videoId = source.substring(source.indexOf("?") + 1).split("=")[1];
-			
-			ArrayList<Pair> videoParams = getVideoParams(videoId, true);
-			String title = getVideoTitle(videoParams);
-			
-			VideoInfo videoInfo = new VideoInfo();
-			
-			videoInfo.title = title != null ? title : videoId;
-			videoInfo.allParams = videoParams;		
-			videoInfo.downloadTypes = parseDownloadTypes(videoParams);
-			
+
+			VideoInfo videoInfo = parseVideoInfo(videoId);
+
 			if (videoInfo.downloadTypes == null || videoInfo.downloadTypes.isEmpty()){
 				return null;
 			}
@@ -170,31 +160,12 @@ public class InfoParser extends JFrame{
 		return null;
 	}
 
-	private ArrayList<DownloadType> parseDownloadTypes(ArrayList<Pair> params){
+	private DownloadType parseDownloadType(ArrayList<Pair> params){
 		try {
-			ArrayList<DownloadType> downloadTypes = new ArrayList<DownloadType>();
-			DownloadType type = null;
-			String firstParam = null;
+			DownloadType type = new DownloadType();
 			
 			for (Pair i : params){
-				if (DownloadType.isParameterNeeded(i.key)){
-					System.out.printf("Arg %-30s first %-30s\n", i.key, firstParam);
-					if (firstParam == null){
-						firstParam = i.key;
-					}
-					else {
-						if (type != null && type.isValid() && (firstParam.equals(i.key) || type.hasFieldSet(i.key))){
-							System.out.println("Done, adding.., key is now " + i.key);
-							firstParam = i.key;
-							downloadTypes.add(type);
-							type = new DownloadType();
-						}
-					}
-					
-					if (type == null){
-						type = new DownloadType();
-					}
-					
+				if (DownloadType.isParameterNeeded(i.key)){					
 					if (i.key.equals("url")){
 						type.url = i.value;
 					}
@@ -204,8 +175,10 @@ public class InfoParser extends JFrame{
 						if (typeCodec[0].startsWith("video")){
 							type.hasVideo = true;
 							
-							String codecs[] = typeCodec[1].substring(typeCodec[1].indexOf("=") + 2, typeCodec[1].length() - 2).split(",");
+							String codecs[] = typeCodec[1].substring(typeCodec[1].indexOf("=") + 2, typeCodec[1].length() - 1).split(",");
+							System.out.println("codecs -> " + Arrays.toString(codecs));
 							if (codecs.length > 1){
+								System.out.println("\t + audio");
 								type.hasAudio = true; //most likely has audio
 							}
 						}
@@ -226,27 +199,9 @@ public class InfoParser extends JFrame{
 						type.otherOptions.add(i);
 					}
 				}
-				else {
-					if (type != null){
-						System.out.println(i.key + " === " + type.type + "\t" + type.quality + "\t" + type.bitrate + "\t" + (type.url != null ? "+url" : "no url"));
-						if (type.isValid()){
-							System.out.println("ADD");
-							downloadTypes.add(type);
-						}
-						else {
-							System.out.println("DISCARD");
-							firstParam = null;
-						}
-						type = null;
-					}
-				}
 			}
 			
-			if (type != null && type.isValid()){
-				downloadTypes.add(type);
-			}
-			
-			return downloadTypes;
+			return type;
 		}
 		catch (Exception e){
 			e.printStackTrace();
@@ -256,18 +211,11 @@ public class InfoParser extends JFrame{
 		return null;
 	}
 	
-	private ArrayList<Pair> getVideoParams(String videoId, boolean useFallBackLink) {
+	private VideoInfo parseVideoInfo(String videoId) {
 		try {
 			setStatus(State.VIDEO_PARAM_START);
 			
-			URI uri = null;
-			
-			if (useFallBackLink){
-				uri = new URI("http://youtube.com/get_video_info?video_id=" + videoId);
-			}
-			else {
-				uri = new URI("https://www.youtube.com/get_video_info?video_id=" + videoId + "&el=vevo&el=embedded&asv=3&sts=15902");
-			}
+			URI uri = new URI("http://youtube.com/get_video_info?video_id=" + videoId);
 			
 			int timeoutInMs = 10 * 1000; // Timeout in millis.
 			RequestConfig requestConfig = RequestConfig.custom()
@@ -299,25 +247,27 @@ public class InfoParser extends JFrame{
 			}
 			
 			String decodedResponse = builder.toString();
-			if (useFallBackLink) {
-				decodedResponse = URLDecoder.decode(builder.toString(), "UTF-8");
-			}
-			ArrayList<Pair> encodedPairs = responseToPairs(decodedResponse, "&", "=");
+			System.out.println(decodedResponse);
+
+			ArrayList<Pair> decodedPairs = responseToPairs(decodedResponse, "&", "=", false);
 			
-			if (useFallBackLink){
-				// Fallback, return whatever you got and pray for it to work
-				return encodedPairs;
+			VideoInfo info = new VideoInfo();
+			info.title = getVideoTitle(decodedPairs);
+			if (info.title == null){
+				info.title = videoId;
 			}
-			else {
-				// Look for the new key value pairs
-				for (Pair i : encodedPairs){
-					if (i.key.equals("url_encoded_fmt_stream_map")){
-						return responseToPairs(URLDecoder.decode(i.value, "UTF-8"), "&", "=");
+			info.downloadTypes = new ArrayList<DownloadType>();
+			
+			for (Pair i : decodedPairs){
+				if (i.key.equals("url_encoded_fmt_stream_map") || i.key.equals("adaptive_fmts")){
+					String fmts[] = i.value.split(",");
+					for (String fmt : fmts){
+						info.downloadTypes.add(parseDownloadType(responseToPairs(fmt, "&", "=", true)));
 					}
 				}
 			}
 			
-			return encodedPairs;
+			return info;
 		}
 		catch (Exception e) {
 			e.printStackTrace();
@@ -343,15 +293,29 @@ public class InfoParser extends JFrame{
 		return null;
 	}
 
-	private ArrayList<Pair> responseToPairs(String input, String pairDelim, String keyValueDelim) {
+	private ArrayList<Pair> responseToPairs(String input, String pairDelim, String keyValueDelim, boolean decodeValues) {
 		ArrayList<Pair> params = new ArrayList<Pair>();
 
 		String kv[] = null;
 		try {
 			String pairs[] = input.split(pairDelim);
+			Pair pair = null;	
+			
 			for (String i : pairs) {
 				kv = i.split(keyValueDelim);
-				params.add(new Pair(kv[0], URLDecoder.decode(kv[1], "UTF-8")));
+				if (kv.length < 2){
+					continue;
+				}
+				
+				pair = new Pair(kv[0], URLDecoder.decode(kv[1], "UTF-8"));
+				if (kv[1].indexOf('=') != -1){
+					String innerPair[] = pair.value.substring(pair.value.indexOf(",")).split("=");
+					if (innerPair.length == 2){
+						params.add(new Pair(innerPair[0], URLDecoder.decode(innerPair[1], "UTF-8")));
+					}
+				}
+				
+				params.add(pair);
 			}
 		}
 		catch (Exception e) {
